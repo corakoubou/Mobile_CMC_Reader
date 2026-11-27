@@ -22,12 +22,578 @@ body.detailOpen .mobileBackdrop{opacity:1;pointer-events:auto}
 body.detailOpen .mobileDetail{transform:translateX(0)}.mobileDetail .detailHead{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}.mobileDetail button{padding:6px;font-size:12px}.mobileDetail textarea{flex:1;min-height:0;width:100%;resize:none;background:rgba(16,19,24,.72);border:1px solid #555;color:white;border-radius:6px;padding:8px;line-height:1.6;font-size:14px}
 .mobileDetail.expanded{width:min(94vw,600px)}.mobileDetail .hint{font-size:10px;color:#aeb5c4}
 }
-</style></head><body><header><h1>📖 コミックメモ</h1><button id="add" class="primary">＋ 画像追加</button><button id="load">JSON読込</button><button id="save">JSON保存</button><button id="export">メモTXT出力</button><button id="viewMode" title="単ページと見開きを切り替え">見開き表示：OFF</button><button id="new">新規</button><span id="status">未保存</span><input type="file" id="images" accept="image/*" multiple><input type="file" id="json" accept=".json,application/json"></header><div class="layout"><aside class="side"><div class="sidehead"><b>ページ一覧</b><span id="count">0ページ</span></div><div id="thumbs" class="thumbs"></div></aside><main class="viewer"><div class="stage" id="stage"><div class="placeholder">「＋ 画像追加」から画像を登録してください<br>JSONファイルからも復元できます</div></div><div class="nav"><button id="next">← 次へ</button><span id="pageLabel">0 / 0</span><button id="prev">前へ →</button></div></main><section class="notes"><h2 id="noteTitle">ページメモ</h2><textarea id="memo" placeholder="このページのメモを入力…"></textarea><div class="noteActions"><button id="up">↑ 前へ移動</button><button id="down">↓ 後へ移動</button><button id="remove" class="danger">ページ削除</button></div><div class="muted">画像はJSONに埋め込んで保存します。大量の画像を登録するとJSONが大きくなります。画像・メモ・閲覧位置は自動保存されます。バックアップにはJSON保存を使用してください。</div></section></div><div class="tapZones" id="tapZones"><div id="tapNext" aria-label="次のページ"></div><div id="tapToggle" class="tapCenter" aria-label="操作バー表示"></div><div id="tapPrev" aria-label="前のページ"></div></div><div class="mobileTop"><button id="mLoad">JSON読込</button><button id="mSave">JSON保存</button><button id="mExport">メモTXT</button><button id="mAdd">画像追加</button></div><div class="mobileBottom"><button id="mNext">←</button><span>ページ</span><input id="mPage" type="number" inputmode="numeric" min="1" value="1" aria-label="ページ番号"><span class="total" id="mTotal">/ 0</span><button id="mGo">移動</button><button id="mPrev">→</button></div><div class="mobileBackdrop" id="mBackdrop"></div><section class="mobileDetail" id="mobileDetail"><div class="detailHead"><b id="mNoteTitle">ページメモ</b><button id="mExpand">拡大</button><button id="mClose">閉じる</button></div><textarea id="mMemo" placeholder="このページのメモを入力…"></textarea><span class="hint">メモは入力時に自動保存されます</span></section><dialog id="confirm"><div id="confirmText"></div><div class="dlgButtons"><button id="cancelConfirm">キャンセル</button><button id="okConfirm" class="danger">実行</button></div></dialog><script>
-(()=>{'use strict';let pages=[],selected=0,dirty=false,projectName='',spread=false;const $=id=>document.getElementById(id);const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const uid=()=>crypto.randomUUID?.()||Math.random().toString(36).slice(2);function status(s){$('status').textContent=s}let db=null,ready=false,revision=0;function persist(full=false){if(!ready||!db)return;const rev=++revision;try{const tx=db.transaction('data','readwrite'),store=tx.objectStore('data');if(full)store.put({pages:pages.map(p=>({...p,memo:''})),projectName},'book');store.put({selected,spread,notes:pages.map(p=>p.memo)},'state');tx.oncomplete=()=>{if(rev===revision){dirty=false;status('✓ 自動保存済み')}};tx.onerror=tx.onabort=()=>{dirty=true;status('⚠ 自動保存失敗');};}catch(e){dirty=true;status('⚠ 自動保存失敗')}}function mark(full=true){dirty=true;status('● 保存中');persist(full)}async function restore(){document.body.inert=true;try{db=await new Promise((resolve,reject)=>{const r=indexedDB.open('comicMemoViewerDB',1);r.onupgradeneeded=()=>r.result.createObjectStore('data');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const tx=db.transaction('data','readonly'),store=tx.objectStore('data');const get=k=>new Promise((resolve,reject)=>{const r=store.get(k);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const [book,state]=await Promise.all([get('book'),get('state')]);if(book){pages=book.pages;projectName=book.projectName;selected=state?.selected||0;spread=!!state?.spread;pages.forEach((p,i)=>p.memo=state?.notes?.[i]??p.memo??'');}ready=true;render();status('✓ 自動保存対応');}catch(e){status('⚠ 自動保存を利用できません');alert('自動保存を利用できません。JSON保存を使用してください。');render()}finally{document.body.inert=false}}function groupFor(i){if(!spread)return [i];if(i===0)return [0];const start=1+2*Math.floor((i-1)/2);return [start,start+1].filter(n=>n<pages.length)}function step(dir){if(!pages.length)return;const group=groupFor(selected);const target=dir>0?group[group.length-1]+1:group[0]-1;if(target>=0&&target<pages.length){selected=target;render()}}function render(){selected=Math.max(0,Math.min(selected,pages.length-1));$('count').textContent=pages.length+'ページ';const group=pages.length?groupFor(selected):[];$('pageLabel').textContent=pages.length?`${group.map(i=>i+1).join('・')} / ${pages.length}`:'0 / 0';$('viewMode').textContent=spread?'見開き表示：ON':'見開き表示：OFF';$('viewMode').classList.toggle('primary',spread);$('thumbs').innerHTML=pages.map((p,i)=>`<div class="thumb ${i===selected?'active':''}" data-index="${i}" draggable="true" title="ドラッグで並べ替え"><div>${i+1}ページ</div>${p.image?`<img src="${p.image}" alt="${esc(p.name||'ページ画像')}">`:'<div class="empty">画像なし</div>'}${p.memo?'<span class="noteDot"></span>':''}</div>`).join('');const p=pages[selected];$('stage').classList.toggle('spread',spread);$('stage').innerHTML=spread&&p?`<div class="spreadPages">${(group.length===1?[-1,...group]:[...group].reverse()).map(i=>i<0?'<div class="spreadEmpty"></div>':`<div class="spreadPage ${i===selected?'active':''}" data-page="${i}" title="${i+1}ページのメモを編集">${pages[i].image?`<img src="${pages[i].image}" alt="${esc(pages[i].name||'ページ画像')}">`:'画像なし'}</div>`).join('')}</div>`:p?.image?`<img src="${p.image}" alt="${esc(p.name||'ページ画像')}">`:'<div class="placeholder">「＋ 画像追加」から画像を登録してください<br>JSONファイルからも復元できます</div>';$('memo').disabled=!p;$('memo').value=p?.memo||'';$('mMemo').value=p?.memo||'';$('mNoteTitle').textContent=p?`${selected+1}ページのメモ`:'ページメモ';$('mPage').value=pages.length?selected+1:'';$('mPage').max=pages.length;$('mTotal').textContent='/ '+pages.length;$('noteTitle').textContent=p?`ページ ${selected+1} のメモ`:'ページメモ';for(const id of ['prev','next','up','down','remove'])$(id).disabled=!p||(id==='prev'&&group[0]===0)||(id==='next'&&group[group.length-1]===pages.length-1)||(id==='up'&&selected===0)||(id==='down'&&selected===pages.length-1);$('thumbs').querySelector('.active')?.scrollIntoView({block:'nearest'});persist();}function move(a,b){if(b<0||b>=pages.length||a===b)return;const [p]=pages.splice(a,1);pages.splice(b,0,p);selected=b;mark();render()}function fileRead(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file)})}function download(content,name,type){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}function ask(message,action){$('confirmText').textContent=message;$('confirm').showModal();$('okConfirm').onclick=()=>{$('confirm').close();action()}}$('cancelConfirm').onclick=()=>$('confirm').close();$('add').onclick=()=>$('images').click();$('images').onchange=async e=>{const files=[...e.target.files].filter(f=>f.type.startsWith('image/'));if(!files.length)return;try{const entries=await Promise.all(files.map(async f=>({id:uid(),name:f.name,image:await fileRead(f),memo:''})));pages.splice(pages.length,0,...entries);selected=pages.length-entries.length;mark();render()}catch(err){alert('画像読込に失敗しました: '+err.message)}e.target.value=''};$('thumbs').onclick=e=>{const el=e.target.closest('.thumb');if(el){selected=+el.dataset.index;render()}};let drag=-1;$('thumbs').ondragstart=e=>{const el=e.target.closest('.thumb');if(el){drag=+el.dataset.index;e.dataTransfer.effectAllowed='move'}};$('thumbs').ondragover=e=>{if(e.target.closest('.thumb'))e.preventDefault()};$('thumbs').ondrop=e=>{const el=e.target.closest('.thumb');if(el&&drag>=0){e.preventDefault();move(drag,+el.dataset.index)}drag=-1};$('mMemo').oninput=e=>{if(!pages[selected])return;pages[selected].memo=e.target.value;$('memo').value=e.target.value;mark(false)};$('memo').oninput=e=>{if(!pages[selected])return;pages[selected].memo=e.target.value;$('mMemo').value=e.target.value;mark(false);const dot=$('thumbs').querySelector(`.thumb[data-index="${selected}"] .noteDot`);if(e.target.value&&!dot){const d=document.createElement('span');d.className='noteDot';$('thumbs').querySelector('.active')?.append(d)}else if(!e.target.value)dot?.remove()};$('prev').onclick=()=>step(-1);$('next').onclick=()=>step(1);$('viewMode').onclick=()=>{spread=!spread;render()};$('stage').onclick=e=>{const el=e.target.closest('[data-page]');if(el){selected=Number(el.dataset.page);render()}};$('up').onclick=()=>move(selected,selected-1);$('down').onclick=()=>move(selected,selected+1);$('remove').onclick=()=>ask(`ページ ${selected+1} を削除しますか？`,()=>{pages.splice(selected,1);mark();render()});$('new').onclick=()=>ask('現在のページとメモをすべて消して新規作成しますか？ JSON保存していない内容は失われます。',()=>{pages=[];selected=0;projectName='';mark();render()});$('save').onclick=()=>{download(JSON.stringify({format:'manga-comic-bundle',version:1,projectName:projectName||'コミックメモ',exportedAt:new Date().toISOString(),orderSource:'display',imageFormat:'image/webp',pages:pages.map((p,i)=>({pageId:p.pageId||p.id,originalPage:p.originalPage??i+1,displayPage:i+1,clipName:p.clipName||p.name||'',memo:p.memo,image:p.image,width:p.width||null,height:p.height||null}))},null,2),'comic-memo.json','application/json');dirty=false;status('✓ JSON保存済み')};$('export').onclick=()=>{const txt=pages.map((p,i)=>`【${i+1}ページ】${p.name?' '+p.name:''}\n${p.memo||'（メモなし）'}`).join('\n\n');download(txt||'メモなし','comic-memo.txt','text/plain;charset=utf-8')};$('load').onclick=()=>$('json').click();$('json').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.pages)||data.pages.length>2000)throw Error('pages配列がない、またはページ数が多すぎます');const parsed=data.pages.map((p,i)=>{if(typeof p!=='object'||p===null||typeof p.image!=='string'||(p.image&&!/^data:image\/(png|jpeg|webp|gif|avif);base64,/.test(p.image)))throw Error(`${i+1}ページ目の画像形式が不正です`);return{id:String(p.id||p.pageId||uid()),pageId:String(p.pageId||p.id||uid()),originalPage:Number(p.originalPage??i+1),name:String(p.name||p.clipName||''),clipName:String(p.clipName||p.name||''),image:p.image,memo:String(p.memo||''),width:Number(p.width||0),height:Number(p.height||0)}});ask(`${parsed.length}ページを読み込みます。現在の内容を置き換えますか？`,()=>{pages=parsed;projectName=String(data.projectName||'');selected=0;dirty=false;persist(true);status('✓ JSON読込済み：'+(projectName||f.name));render()})}catch(err){alert('JSON読込エラー: '+err.message)}e.target.value=''};$('mLoad').onclick=()=>$('load').click();$('mSave').onclick=()=>$('save').click();$('mExport').onclick=()=>$('export').click();$('mAdd').onclick=()=>$('add').click();
+
+/* Page annotations */
+.stage{position:relative}
+.bubbleLayer{position:absolute;z-index:11;pointer-events:none;overflow:hidden}
+.comicBubble{position:absolute;transform:translate(-50%,-50%);display:grid;place-items:center;overflow:hidden;padding:8px;background:#fff;color:#111;border:2px solid #181818;border-radius:50%;pointer-events:auto;writing-mode:vertical-rl;text-orientation:mixed;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.15}
+.comicBubble[data-shape="rectangle"]{border-radius:4px}
+.bubbleText{cursor:text;min-inline-size:0;max-inline-size:100%}
+.bubbleText[contenteditable]{min-inline-size:1em;min-block-size:1em;outline:none;user-select:text;caret-color:#111}
+.bubbleResizeHandle{position:absolute;z-index:1;width:24px;height:24px;padding:0;border:0;background:transparent;transform:translate(-100%,-100%);pointer-events:auto;touch-action:none;cursor:nwse-resize}
+.bubbleResizeHandle:hover{background:transparent}
+.bubbleResizeHandle::after{content:"";display:block;position:absolute;right:0;bottom:0;width:14px;height:14px;background:#ffdb29;border:2px solid #302600;border-radius:2px}
+.annotationTools [data-bubble-undo]:disabled{display:inline-block}
+.comicBubble{touch-action:none;cursor:grab;user-select:none}
+.comicBubble:active{cursor:grabbing}
+.comicBubble .bubbleText:not([contenteditable]){cursor:inherit}
+.comicBubble:hover{background:#fff}
+body:not(.bubbleSettingsOpen) .comicBubble[aria-pressed="true"]{outline:3px solid #437ef0;outline-offset:-3px}
+.annotationTools{display:flex;gap:5px;flex-wrap:wrap}
+.annotationTools button[aria-pressed="true"]{background:#345b9b;border-color:#8ab0f4}
+.annotationTools button:disabled{display:none}
+.memoOpacity{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px}
+.memoOpacity input{flex:1;min-width:65px}
+.bubbleBackdrop{position:fixed;inset:0;z-index:41;background:#0004;opacity:0;pointer-events:none;transition:opacity .2s}
+.bubbleSettings{position:fixed;inset:0 auto 0 0;width:min(70vw,400px);z-index:42;display:flex;flex-direction:column;gap:12px;overflow:auto;padding:14px;background:#1b1e25f2;box-shadow:5px 0 24px #0008;transform:translateX(-105%);visibility:hidden;transition:transform .23s ease,visibility 0s .23s}
+.bubbleBackdrop,.bubbleSettings{touch-action:pan-y pinch-zoom}
+body.bubbleSettingsOpen .bubbleBackdrop{opacity:1;pointer-events:auto}
+body.bubbleSettingsOpen .bubbleSettings{visibility:visible;transform:translateX(0);transition-delay:0s}
+.bubbleSettings header{display:flex;align-items:center;justify-content:space-between;padding:0 0 8px}
+.bubbleSettings label{display:grid;gap:4px}
+.bubbleSettings textarea{width:100%;min-height:5em}
+@media(max-width:850px){
+  body[data-reader-mode="place"] .tapZones>div{pointer-events:none}
+  body[data-reader-mode="place"] .stage{touch-action:pan-y pinch-zoom}
+  .mobileDetail{background:rgba(27,30,37,var(--memo-opacity,.86))}
+  .mobileDetail textarea{background:rgba(16,19,24,calc(var(--memo-opacity,.86) * .84))}
+  .bubbleSettings header{display:flex!important}
+  .bubbleSettings input,.bubbleSettings textarea,.bubbleSettings select{font-size:16px}
+}
+</style></head><body><header><h1>📖 コミックメモ</h1><button id="add" class="primary">＋ 画像追加</button><button id="load">JSON読込</button><button id="save">JSON保存</button><button id="export">メモTXT出力</button><button id="viewMode" title="単ページと見開きを切り替え">見開き表示：OFF</button><button id="new">新規</button><span id="status">未保存</span><div class="annotationTools" role="group" aria-label="編集モード"><button type="button" data-mode="memo" aria-pressed="true">メモ</button><button type="button" data-mode="place" aria-pressed="false">吹き出し</button><button type="button" class="danger" data-bubble-delete disabled>吹き出しを消す</button><button type="button" data-bubble-undo disabled>元に戻す</button><button type="button" data-bubble-settings disabled>吹き出し設定</button></div><input type="file" id="images" accept="image/*" multiple><input type="file" id="json" accept=".json,application/json"></header><div class="layout"><aside class="side"><div class="sidehead"><b>ページ一覧</b><span id="count">0ページ</span></div><div id="thumbs" class="thumbs"></div></aside><main class="viewer"><div class="stage" id="stage"><div class="placeholder">「＋ 画像追加」から画像を登録してください<br>JSONファイルからも復元できます</div></div><div class="nav"><button id="next">← 次へ</button><span id="pageLabel">0 / 0</span><button id="prev">前へ →</button></div></main><section class="notes"><h2 id="noteTitle">ページメモ</h2><textarea id="memo" placeholder="このページのメモを入力…"></textarea><div class="noteActions"><button id="up">↑ 前へ移動</button><button id="down">↓ 後へ移動</button><button id="remove" class="danger">ページ削除</button></div><div class="muted">画像はJSONに埋め込んで保存します。大量の画像を登録するとJSONが大きくなります。画像・メモ・閲覧位置は自動保存されます。バックアップにはJSON保存を使用してください。</div></section></div><div class="tapZones" id="tapZones"><div id="tapNext" aria-label="次のページ"></div><div id="tapToggle" class="tapCenter" aria-label="操作バー表示"></div><div id="tapPrev" aria-label="前のページ"></div></div><div class="mobileTop"><button id="mLoad">JSON読込</button><button id="mSave">JSON保存</button><button id="mExport">メモTXT</button><button id="mAdd">画像追加</button><div class="annotationTools" role="group" aria-label="編集モード"><button type="button" data-mode="memo" aria-pressed="true">メモ</button><button type="button" data-mode="place" aria-pressed="false">吹き出し</button><button type="button" class="danger" data-bubble-delete disabled>吹き出しを消す</button><button type="button" data-bubble-undo disabled>元に戻す</button><button type="button" data-bubble-settings disabled>吹き出し設定</button></div></div><div class="mobileBottom"><button id="mNext">←</button><span>ページ</span><input id="mPage" type="number" inputmode="numeric" min="1" value="1" aria-label="ページ番号"><span class="total" id="mTotal">/ 0</span><button id="mGo">移動</button><button id="mPrev">→</button></div><div class="mobileBackdrop" id="mBackdrop"></div><section class="mobileDetail" id="mobileDetail"><div class="detailHead"><b id="mNoteTitle">ページメモ</b><button id="mExpand">拡大</button><button id="mClose">閉じる</button></div><label class="memoOpacity">透明度 <input id="memoOpacity" type="range" min="0" max="85" value="14"><output id="memoOpacityValue" for="memoOpacity">14%</output></label><textarea id="mMemo" placeholder="このページのメモを入力…"></textarea><span class="hint">メモは入力時に自動保存されます</span></section><div class="bubbleBackdrop" id="bubbleBackdrop"></div>
+<section class="bubbleSettings" id="bubbleSettings" aria-labelledby="bubbleSettingsTitle" inert>
+  <header><strong id="bubbleSettingsTitle">吹き出し設定</strong><button type="button" data-bubble-undo disabled>元に戻す</button><button id="closeBubbleSettings" type="button">閉じる</button></header>
+  <label>形<select id="bubbleShape"><option value="ellipse">楕円</option><option value="rectangle">四角</option></select></label>
+  <label>吹き出しの幅（画像に対する％）<input id="bubbleWidth" type="number" min="8" max="90" step="0.01" value="18"></label>
+  <label>吹き出しの高さ（画像に対する％）<input id="bubbleHeight" type="number" min="8" max="90" step="0.01" value="18"></label>
+  <label>枠線の太さ（px）<input id="bubbleBorderWidth" type="number" min="0" max="12" step="1" value="2"></label>
+  <label>文字の揃え方<select id="bubbleTextAlign"><option value="start">上揃え</option><option value="center">中央揃え</option><option value="end">下揃え</option></select></label>
+  <label>枠線から文字までの余白（px）<input id="bubblePadding" type="number" min="0" max="40" step="1" value="8"></label>
+  <label>文字サイズ（px）<input id="bubbleSize" type="number" min="10" max="48" value="18"></label>
+  <label>フォント<select id="bubbleFont"><option value="gothic">ゴシック体</option><option value="mincho">明朝体</option><option value="rounded">丸ゴシック体</option></select></label>
+  <button id="saveBubbleDefaults" type="button">次の吹き出しの初期値に登録</button>
+  <output id="bubbleDefaultsStatus" aria-live="polite"></output>
+</section><dialog id="confirm"><div id="confirmText"></div><div class="dlgButtons"><button id="cancelConfirm">キャンセル</button><button id="okConfirm" class="danger">実行</button></div></dialog><script>
+(()=>{'use strict';let pages=[],selected=0,dirty=false,projectName='',spread=false;const $=id=>document.getElementById(id);const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const uid=()=>crypto.randomUUID?.()||Math.random().toString(36).slice(2);function status(s){$('status').textContent=s}let db=null,ready=false,revision=0;function persist(full=false){if(!ready||!db)return;const rev=++revision;try{const tx=db.transaction('data','readwrite'),store=tx.objectStore('data');if(full)store.put({pages:pages.map(p=>({...p,memo:''})),projectName},'book');store.put({selected,spread,notes:pages.map(p=>p.memo),bubbles:pages.map(p=>p.bubbles||[]),memoTransparency,nextBubbleStyle},'state');tx.oncomplete=()=>{if(rev===revision){dirty=false;status('✓ 自動保存済み')}};tx.onerror=tx.onabort=()=>{dirty=true;status('⚠ 自動保存失敗');};}catch(e){dirty=true;status('⚠ 自動保存失敗')}}function mark(full=true){dirty=true;status('● 保存中');persist(full)}async function restore(){document.body.inert=true;try{db=await new Promise((resolve,reject)=>{const r=indexedDB.open('comicMemoViewerDB',1);r.onupgradeneeded=()=>r.result.createObjectStore('data');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const tx=db.transaction('data','readonly'),store=tx.objectStore('data');const get=k=>new Promise((resolve,reject)=>{const r=store.get(k);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const [book,state]=await Promise.all([get('book'),get('state')]);if(book){pages=book.pages;projectName=book.projectName;selected=state?.selected||0;spread=!!state?.spread;pages.forEach((p,i)=>{p.memo=state?.notes?.[i]??p.memo??'';p.bubbles=readBubbles(state?.bubbles?.[i]??p.bubbles);});}setMemoTransparency(state?.memoTransparency);nextBubbleStyle=readBubbleStyle(state?.nextBubbleStyle??undefined);ready=true;render();status('✓ 自動保存対応');}catch(e){status('⚠ 自動保存を利用できません');alert('自動保存を利用できません。JSON保存を使用してください。');render()}finally{document.body.inert=false}}function groupFor(i){if(!spread)return [i];if(i===0)return [0];const start=1+2*Math.floor((i-1)/2);return [start,start+1].filter(n=>n<pages.length)}function step(dir){if(!pages.length)return;const group=groupFor(selected);const target=dir>0?group[group.length-1]+1:group[0]-1;if(target>=0&&target<pages.length){selected=target;render()}}function render(keepStage=false){finishInlineBubbleEdit();selected=Math.max(0,Math.min(selected,pages.length-1));$('count').textContent=pages.length+'ページ';const group=pages.length?groupFor(selected):[];$('pageLabel').textContent=pages.length?`${group.map(i=>i+1).join('・')} / ${pages.length}`:'0 / 0';$('viewMode').textContent=spread?'見開き表示：ON':'見開き表示：OFF';$('viewMode').classList.toggle('primary',spread);$('thumbs').innerHTML=pages.map((p,i)=>`<div class="thumb ${i===selected?'active':''}" data-index="${i}" draggable="true" title="ドラッグで並べ替え"><div>${i+1}ページ</div>${p.image?`<img src="${p.image}" alt="${esc(p.name||'ページ画像')}">`:'<div class="empty">画像なし</div>'}${p.memo?'<span class="noteDot"></span>':''}</div>`).join('');const p=pages[selected];$('stage').classList.toggle('spread',spread);if(!keepStage)$('stage').innerHTML=spread&&p?`<div class="spreadPages">${(group.length===1?[-1,...group]:[...group].reverse()).map(i=>i<0?'<div class="spreadEmpty"></div>':`<div class="spreadPage ${i===selected?'active':''}" data-page="${i}" title="${i+1}ページのメモを編集">${pages[i].image?`<img src="${pages[i].image}" alt="${esc(pages[i].name||'ページ画像')}">`:'画像なし'}</div>`).join('')}</div>`:p?.image?`<img src="${p.image}" alt="${esc(p.name||'ページ画像')}">`:'<div class="placeholder">「＋ 画像追加」から画像を登録してください<br>JSONファイルからも復元できます</div>';if(keepStage)stage.querySelectorAll('.spreadPage').forEach(el=>el.classList.toggle('active',Number(el.dataset.page)===selected));$('memo').disabled=!p;$('memo').value=p?.memo||'';$('mMemo').value=p?.memo||'';$('mNoteTitle').textContent=p?`${selected+1}ページのメモ`:'ページメモ';$('mPage').value=pages.length?selected+1:'';$('mPage').max=pages.length;$('mTotal').textContent='/ '+pages.length;$('noteTitle').textContent=p?`ページ ${selected+1} のメモ`:'ページメモ';for(const id of ['prev','next','up','down','remove'])$(id).disabled=!p||(id==='prev'&&group[0]===0)||(id==='next'&&group[group.length-1]===pages.length-1)||(id==='up'&&selected===0)||(id==='down'&&selected===pages.length-1);$('thumbs').querySelector('.active')?.scrollIntoView({block:'nearest'});mountBubbles(keepStage);persist();}function move(a,b){if(b<0||b>=pages.length||a===b)return;const [p]=pages.splice(a,1);pages.splice(b,0,p);selected=b;mark();render()}function fileRead(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsDataURL(file)})}function download(content,name,type){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}function ask(message,action){$('confirmText').textContent=message;$('confirm').showModal();$('okConfirm').onclick=()=>{$('confirm').close();action()}}$('cancelConfirm').onclick=()=>$('confirm').close();$('add').onclick=()=>$('images').click();$('images').onchange=async e=>{const files=[...e.target.files].filter(f=>f.type.startsWith('image/'));if(!files.length)return;try{const entries=await Promise.all(files.map(async f=>({id:uid(),name:f.name,image:await fileRead(f),memo:''})));pages.splice(pages.length,0,...entries);selected=pages.length-entries.length;mark();render()}catch(err){alert('画像読込に失敗しました: '+err.message)}e.target.value=''};$('thumbs').onclick=e=>{const el=e.target.closest('.thumb');if(el){selected=+el.dataset.index;render()}};let drag=-1;$('thumbs').ondragstart=e=>{const el=e.target.closest('.thumb');if(el){drag=+el.dataset.index;e.dataTransfer.effectAllowed='move'}};$('thumbs').ondragover=e=>{if(e.target.closest('.thumb'))e.preventDefault()};$('thumbs').ondrop=e=>{const el=e.target.closest('.thumb');if(el&&drag>=0){e.preventDefault();move(drag,+el.dataset.index)}drag=-1};$('mMemo').oninput=e=>{if(!pages[selected])return;pages[selected].memo=e.target.value;$('memo').value=e.target.value;mark(false)};$('memo').oninput=e=>{if(!pages[selected])return;pages[selected].memo=e.target.value;$('mMemo').value=e.target.value;mark(false);const dot=$('thumbs').querySelector(`.thumb[data-index="${selected}"] .noteDot`);if(e.target.value&&!dot){const d=document.createElement('span');d.className='noteDot';$('thumbs').querySelector('.active')?.append(d)}else if(!e.target.value)dot?.remove()};$('prev').onclick=()=>step(-1);$('next').onclick=()=>step(1);$('viewMode').onclick=()=>{spread=!spread;render()};$('up').onclick=()=>move(selected,selected-1);$('down').onclick=()=>move(selected,selected+1);$('remove').onclick=()=>ask(`ページ ${selected+1} を削除しますか？`,()=>{pages.splice(selected,1);mark();render()});$('new').onclick=()=>ask('現在のページとメモをすべて消して新規作成しますか？ JSON保存していない内容は失われます。',()=>{pages=[];selected=0;projectName='';mark();render()});$('save').onclick=()=>{download(JSON.stringify({format:'manga-comic-bundle',version:1,projectName:projectName||'コミックメモ',exportedAt:new Date().toISOString(),orderSource:'display',imageFormat:'image/webp',pages:pages.map((p,i)=>({pageId:p.pageId||p.id,originalPage:p.originalPage??i+1,displayPage:i+1,clipName:p.clipName||p.name||'',memo:p.memo,image:p.image,width:p.width||null,height:p.height||null,bubbles:p.bubbles||[]}))},null,2),'comic-memo.json','application/json');dirty=false;status('✓ JSON保存済み')};$('export').onclick=()=>{const txt=pages.map((p,i)=>`【${i+1}ページ】${p.name?' '+p.name:''}\n${p.memo||'（メモなし）'}`).join('\n\n');download(txt||'メモなし','comic-memo.txt','text/plain;charset=utf-8')};$('load').onclick=()=>$('json').click();$('json').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.pages)||data.pages.length>2000)throw Error('pages配列がない、またはページ数が多すぎます');const parsed=data.pages.map((p,i)=>{if(typeof p!=='object'||p===null||typeof p.image!=='string'||(p.image&&!/^data:image\/(png|jpeg|webp|gif|avif);base64,/.test(p.image)))throw Error(`${i+1}ページ目の画像形式が不正です`);return{id:String(p.id||p.pageId||uid()),pageId:String(p.pageId||p.id||uid()),originalPage:Number(p.originalPage??i+1),name:String(p.name||p.clipName||''),clipName:String(p.clipName||p.name||''),image:p.image,memo:String(p.memo||''),width:Number(p.width||0),height:Number(p.height||0),bubbles:readBubbles(p.bubbles)}});ask(`${parsed.length}ページを読み込みます。現在の内容を置き換えますか？`,()=>{pages=parsed;projectName=String(data.projectName||'');selected=0;dirty=false;persist(true);status('✓ JSON読込済み：'+(projectName||f.name));render()})}catch(err){alert('JSON読込エラー: '+err.message)}e.target.value=''};$('mLoad').onclick=()=>$('load').click();$('mSave').onclick=()=>$('save').click();$('mExport').onclick=()=>$('export').click();$('mAdd').onclick=()=>$('add').click();
 $('tapToggle').onclick=()=>document.body.classList.toggle('controlsVisible');$('tapNext').onclick=()=>step(1);$('tapPrev').onclick=()=>step(-1);
 $('mNext').onclick=()=>step(1);$('mPrev').onclick=()=>step(-1);
 function jump(){const n=Number($('mPage').value);if(Number.isInteger(n)&&n>=1&&n<=pages.length){selected=n-1;render()}else{$('mPage').value=pages.length?selected+1:''}}
 $('mGo').onclick=jump;$('mPage').onkeydown=e=>{if(e.key==='Enter'){$('mPage').blur();jump()}};
+const stage=$('stage');
+const bubbleFonts={
+  gothic:'"Noto Sans JP", sans-serif',
+  mincho:'"Noto Serif JP", "Yu Mincho", serif',
+  rounded:'"Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", system-ui, sans-serif'
+};
+let readerMode='memo', activeBubble=null, memoTransparency=14, nextBubbleStyle;
+const bounded=(value,min,max,fallback)=>Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
+
+function readBubbleStyle(item={}){
+  return {
+    width:bounded(item.width,...bubbleNumbers.width),
+    height:bounded(item.height,...bubbleNumbers.height),
+    borderWidth:bounded(item.borderWidth,...bubbleNumbers.borderWidth),
+    padding:bounded(item.padding,...bubbleNumbers.padding),
+    textAlign:['start','center','end'].includes(item.textAlign)?item.textAlign:'center',
+    shape:item.shape==='rectangle'?'rectangle':'ellipse',
+    size:bounded(item.size,...bubbleNumbers.size),
+    font:Object.hasOwn(bubbleFonts,item.font)?item.font:'gothic'
+  };
+}
+
+function readBubbles(value){
+  if(!Array.isArray(value))return [];
+  return value.filter(item=>item&&typeof item==='object').map(item=>({
+    ...readBubbleStyle(item),
+    x:bounded(item.x,0,1,.5),
+    y:bounded(item.y,0,1,.5),
+    text:typeof item.text==='string'?item.text:''
+  }));
+}
+
+function setMemoTransparency(value){
+  memoTransparency=bounded(value,0,85,14);
+  document.body.style.setProperty('--memo-opacity',1-memoTransparency/100);
+  $('memoOpacity').value=memoTransparency;
+  $('memoOpacityValue').value=memoTransparency+'%';
+}
+$('memoOpacity').oninput=()=>{
+  setMemoTransparency($('memoOpacity').valueAsNumber);
+  mark(false);
+};
+
+const bubbleUndo=[];
+const bubbleUndoLimit=10;
+let inlineBubbleEdit=null;
+
+function rememberBubbleEdit(page){
+  bubbleUndo.push({page,bubbles:(page.bubbles||[]).map(bubble=>({...bubble}))});
+  if(bubbleUndo.length>bubbleUndoLimit)bubbleUndo.shift();
+}
+
+document.querySelectorAll('[data-bubble-undo]').forEach(button=>{
+  button.onclick=()=>{
+    finishInlineBubbleEdit();
+    const step=bubbleUndo.pop();
+    if(!step)return;
+    const {page,bubbles}=step;
+    page.bubbles=bubbles;
+    selected=pages.indexOf(page);
+    activeBubble=null;
+    mark(false);
+    render();
+  };
+});
+
+function syncBubbleTools(){
+  for(let i=bubbleUndo.length-1;i>=0;i--){
+    if(!pages.includes(bubbleUndo[i].page))bubbleUndo.splice(i,1);
+  }
+  document.querySelectorAll('[data-bubble-undo]').forEach(button=>{
+    button.disabled=bubbleUndo.length===0;
+  });
+  document.querySelectorAll('[data-mode]').forEach(button=>{
+    button.setAttribute('aria-pressed',String(button.dataset.mode===readerMode));
+  });
+  document.querySelectorAll('[data-bubble-settings],[data-bubble-delete]').forEach(button=>{
+    button.disabled=!activeBubble;
+  });
+}
+
+function closeBubbleSettings(){
+  backdropPointer=null;
+  document.body.classList.remove('bubbleSettingsOpen');
+  $('bubbleSettings').inert=true;
+}
+function openBubbleSettings(){
+  if(!activeBubble)return;
+  $('bubbleShape').value=activeBubble.shape;
+  $('bubbleWidth').value=Number(activeBubble.width.toFixed(2));
+  $('bubbleHeight').value=Number(activeBubble.height.toFixed(2));
+  $('bubbleSize').value=activeBubble.size;
+  $('bubbleBorderWidth').value=activeBubble.borderWidth;
+  $('bubblePadding').value=activeBubble.padding;
+  $('bubbleTextAlign').value=activeBubble.textAlign;
+  $('bubbleFont').value=activeBubble.font;
+  document.body.classList.add('bubbleSettingsOpen','controlsVisible');
+  $('bubbleDefaultsStatus').value='';
+  $('bubbleSettings').inert=false;
+}
+$('saveBubbleDefaults').onclick=()=>{
+  if(!activeBubble)return;
+  nextBubbleStyle=readBubbleStyle(activeBubble);
+  mark(false);
+  $('bubbleDefaultsStatus').value='次の吹き出しに適用します';
+};
+$('closeBubbleSettings').onclick=closeBubbleSettings;
+const bubbleBackdrop=$('bubbleBackdrop');
+let backdropPointer=null;
+bubbleBackdrop.onpointerdown=event=>{backdropPointer=event.pointerId};
+bubbleBackdrop.onpointercancel=()=>{backdropPointer=null};
+bubbleBackdrop.onclick=event=>{
+  if(backdropPointer!==null&&event.pointerId===backdropPointer)closeBubbleSettings();
+  backdropPointer=null;
+};
+document.querySelectorAll('[data-bubble-settings]').forEach(button=>button.onclick=openBubbleSettings);
+document.querySelectorAll('[data-bubble-delete]').forEach(button=>{
+  button.onclick=()=>{
+    finishInlineBubbleEdit();
+    const page=pages[selected];
+    const index=page?.bubbles?.indexOf(activeBubble)??-1;
+    if(index<0)return;
+    resetBubbleClicks();
+    rememberBubbleEdit(page);
+    page.bubbles.splice(index,1);
+    activeBubble=null;
+    closeBubbleSettings();
+    syncBubbleTools();
+    paintBubbles();
+    mark(false);
+  };
+});
+function setReaderMode(mode){
+  finishInlineBubbleEdit();
+  resetBubbleClicks();
+  readerMode=mode;
+  document.body.dataset.readerMode=mode;
+  activeBubble=null;
+  closeBubbleSettings();
+  syncBubbleTools();
+  paintBubbles();
+}
+document.querySelectorAll('[data-mode]').forEach(button=>{
+  button.onclick=()=>setReaderMode(button.dataset.mode);
+});
+const bubbleNumbers={size:[10,48,18],width:[8,90,18],height:[8,90,18],borderWidth:[0,12,2],padding:[0,40,8]};
+for(const [field,id] of Object.entries({shape:'bubbleShape',size:'bubbleSize',font:'bubbleFont',width:'bubbleWidth',height:'bubbleHeight',borderWidth:'bubbleBorderWidth',padding:'bubblePadding',textAlign:'bubbleTextAlign'})){
+  $(id).addEventListener('change',event=>{
+    if(!activeBubble)return;
+    const input=event.target;
+    const limits=bubbleNumbers[field];
+    const value=limits?bounded(input.valueAsNumber,...limits):input.value;
+    if(limits)input.value=value;
+    if(activeBubble[field]===value)return;
+    rememberBubbleEdit(pages[selected]);
+    activeBubble[field]=value;
+    $('bubbleDefaultsStatus').value='';
+    syncBubbleTools();
+    paintBubbles();
+    mark(false);
+  });
+}
+
+function saveInlineBubbleText(){
+  if(!inlineBubbleEdit)return;
+  const edit=inlineBubbleEdit;
+  const value=edit.text.innerText;
+  if(value===edit.bubble.text)return;
+  if(!edit.changed){
+    rememberBubbleEdit(edit.page);
+    edit.changed=true;
+  }
+  edit.bubble.text=value;
+  mark(false);
+  syncBubbleTools();
+}
+
+function finishInlineBubbleEdit(){
+  if(!inlineBubbleEdit)return;
+  saveInlineBubbleText();
+  const {editor,button,bubble}=inlineBubbleEdit;
+  inlineBubbleEdit=null;
+  button.querySelector('.bubbleText').textContent=bubble.text||'…';
+  button.setAttribute('aria-label',bubble.text||'空の吹き出し');
+  editor.replaceWith(button);
+}
+
+function startInlineBubbleEdit(x,y){
+  const page=pages[selected];
+  const index=page?.bubbles?.indexOf(activeBubble);
+  const button=stage.querySelector(`.comicBubble[data-page-index="${selected}"][data-bubble-index="${index}"]`);
+  if(!button)return;
+  const editor=document.createElement('div');
+  editor.className=button.className;
+  editor.style.cssText=button.style.cssText;
+  editor.dataset.shape=button.dataset.shape;
+  editor.dataset.pageIndex=selected;
+  editor.dataset.bubbleIndex=index;
+  editor.setAttribute('aria-pressed','true');
+  const text=document.createElement('span');
+  text.className='bubbleText';
+  text.contentEditable='plaintext-only';
+  text.setAttribute('role','textbox');
+  text.setAttribute('aria-label','吹き出しの文字');
+  text.setAttribute('aria-multiline','true');
+  text.textContent=activeBubble.text;
+  editor.append(text);
+  inlineBubbleEdit={page,bubble:activeBubble,editor,button,text,changed:false};
+  text.addEventListener('input',saveInlineBubbleText);
+  text.addEventListener('blur',finishInlineBubbleEdit);
+  text.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&!event.isComposing){
+      event.preventDefault();
+      text.blur();
+    }
+  });
+  button.replaceWith(editor);
+  text.focus({preventScroll:true});
+  const caret=document.caretPositionFromPoint?.(x,y);
+  const range=document.createRange();
+  range.selectNodeContents(text);
+  if(caret&&text.contains(caret.offsetNode)){
+    range.setStart(caret.offsetNode,caret.offset);
+    range.collapse(true);
+  }else{
+    range.collapse(false);
+  }
+  const selection=window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function pageAtImage(img){
+  const spreadPage=img.closest('[data-page]');
+  return spreadPage?Number(spreadPage.dataset.page):selected;
+}
+
+function imageBounds(img){
+  const box=img.getBoundingClientRect();
+  if(!img.naturalWidth||!box.width||!box.height)return null;
+  const scale=Math.min(box.width/img.naturalWidth,box.height/img.naturalHeight);
+  const width=img.naturalWidth*scale,height=img.naturalHeight*scale;
+  return {left:box.left+(box.width-width)/2,top:box.top+(box.height-height)/2,width,height};
+}
+
+function fitBubblePosition(center,size){
+  const half=size/200;
+  return bounded(center,half,1-half,.5);
+}
+
+function positionBubble(button,bubble,handle){
+  const x=fitBubblePosition(bubble.x,bubble.width)*100;
+  const y=fitBubblePosition(bubble.y,bubble.height)*100;
+  Object.assign(button.style,{
+    left:x+'%',top:y+'%',width:bubble.width+'%',height:bubble.height+'%'
+  });
+  if(handle){
+    handle.style.left=x+bubble.width/2+'%';
+    handle.style.top=y+bubble.height/2+'%';
+  }
+}
+
+let bubbleDrag=null;
+function paintBubbles(){
+  if(bubbleDrag||inlineBubbleEdit)return;
+  stage.querySelectorAll('.bubbleLayer').forEach(layer=>layer.remove());
+  const stageBox=stage.getBoundingClientRect();
+  for(const img of stage.querySelectorAll('img')){
+    const index=pageAtImage(img);
+    const bubbles=pages[index]?.bubbles;
+    const box=imageBounds(img);
+    if(!box||!bubbles?.length)continue;
+    const layer=document.createElement('div');
+    layer.className='bubbleLayer';
+    Object.assign(layer.style,{
+      left:box.left-stageBox.left+stage.scrollLeft+'px',
+      top:box.top-stageBox.top+stage.scrollTop+'px',
+      width:box.width+'px',height:box.height+'px'
+    });
+    bubbles.forEach((bubble,i)=>{
+      const button=document.createElement('button');
+      button.type='button';
+      button.className='comicBubble';
+      button.dataset.pageIndex=index;
+      button.dataset.bubbleIndex=i;
+      button.dataset.shape=bubble.shape;
+      button.setAttribute('aria-label',bubble.text||'空の吹き出し');
+      button.setAttribute('aria-pressed',String(bubble===activeBubble));
+      const text=document.createElement('span');
+      text.className='bubbleText';
+      text.textContent=bubble.text||'…';
+      button.append(text);
+      button.style.fontFamily=bubbleFonts[bubble.font];
+      button.style.fontSize=bubble.size+'px';
+      button.style.borderWidth=bubble.borderWidth+'px';
+      button.style.padding=bubble.padding+'px';
+      button.style.justifyItems=bubble.textAlign;
+      button.style.textAlign=bubble.textAlign;
+      layer.append(button);
+      let handle;
+      if(bubble===activeBubble){
+        handle=document.createElement('button');
+        handle.type='button';
+        handle.className='bubbleResizeHandle';
+        handle.setAttribute('aria-label','吹き出しの大きさを調整');
+        handle.onclick=()=>openBubbleSettings();
+        layer.append(handle);
+      }
+      positionBubble(button,bubble,handle);
+    });
+    stage.append(layer);
+  }
+}
+
+const bubbleResize=new ResizeObserver(paintBubbles);
+function mountBubbles(keepStage){
+  if(!pages[selected]?.bubbles?.includes(activeBubble)){
+    activeBubble=null;
+    closeBubbleSettings();
+  }
+  syncBubbleTools();
+  if(!keepStage){
+    bubbleResize.disconnect();
+    bubbleResize.observe(stage);
+    stage.querySelectorAll('img').forEach(img=>{
+      img.addEventListener('load',paintBubbles,{once:true});
+      bubbleResize.observe(img);
+    });
+  }
+  paintBubbles();
+}
+
+const bubbleClickWindow=350;
+let bubbleClicks=null;
+
+function resetBubbleClicks(){
+  if(bubbleClicks)clearTimeout(bubbleClicks.timer);
+  bubbleClicks=null;
+}
+
+function selectBubbleByClick(bubble,index,event){
+  const now=performance.now();
+  const previous=bubbleClicks;
+  const sameClick=previous?.bubble===bubble&&now-previous.time<=bubbleClickWindow
+    &&Math.hypot(event.clientX-previous.x,event.clientY-previous.y)<=24;
+  const count=sameClick?previous.count+1:1;
+  resetBubbleClicks();
+  selected=index;
+  activeBubble=bubble;
+  document.body.classList.add('controlsVisible');
+  render(true);
+  if(count===3){
+    openBubbleSettings();
+    return;
+  }
+
+  const click={bubble,count,time:now,x:event.clientX,y:event.clientY,timer:null};
+  bubbleClicks=click;
+  if(count===2){
+    click.timer=setTimeout(()=>{
+      if(bubbleClicks!==click)return;
+      resetBubbleClicks();
+      if(activeBubble===bubble&&pages[selected]?.bubbles?.includes(bubble)
+        &&!document.body.classList.contains('detailOpen')&&$('bubbleSettings').inert){
+        startInlineBubbleEdit(click.x,click.y);
+      }
+    },bubbleClickWindow);
+  }
+}
+
+function imageHit(event){
+  const img=event.target.closest('img');
+  const box=img&&imageBounds(img);
+  if(!box||event.clientX<box.left||event.clientX>box.left+box.width
+    ||event.clientY<box.top||event.clientY>box.top+box.height)return null;
+  return {img,box};
+}
+
+let stageClickStartedOnBubble=false;
+let outsideTap=null;
+let outsideTapHandled=false;
+stage.addEventListener('pointerdown',event=>{
+  const handle=event.target.closest('.bubbleResizeHandle');
+  const button=handle?handle.previousElementSibling:event.target.closest('.comicBubble');
+  if(event.target.closest('[contenteditable]'))return;
+  if(!event.isPrimary||event.button!==0)return;
+  stageClickStartedOnBubble=!!button;
+  outsideTapHandled=false;
+  outsideTap=readerMode==='place'&&!button&&!imageHit(event)
+    ? {id:event.pointerId,x:event.clientX,y:event.clientY}
+    : null;
+  if(!button||bubbleDrag)return;
+  const index=Number(button.dataset.pageIndex);
+  const bubble=pages[index].bubbles[Number(button.dataset.bubbleIndex)];
+  const box=button.parentElement.getBoundingClientRect();
+  const visibleHandle=button.nextElementSibling;
+  bubbleDrag={
+    id:event.pointerId,index,bubble,button,box,handle,
+    visibleHandle:visibleHandle?.matches('.bubbleResizeHandle')?visibleHandle:null,
+    startX:event.clientX,startY:event.clientY,
+    x:fitBubblePosition(bubble.x,bubble.width),y:fitBubblePosition(bubble.y,bubble.height)
+  };
+  if(handle)event.preventDefault();
+  stage.setPointerCapture(event.pointerId);
+});
+
+function bubbleDragGeometry(drag,dx,dy){
+  const {bubble,box,x,y,handle}=drag;
+  if(handle){
+    const left=x-bubble.width/200,top=y-bubble.height/200;
+    const width=bounded(bubble.width+dx/box.width*100,8,Math.min(90,(1-left)*100),bubble.width);
+    const height=bounded(bubble.height+dy/box.height*100,8,Math.min(90,(1-top)*100),bubble.height);
+    return {x:left+width/200,y:top+height/200,width,height};
+  }
+  return {
+    x:fitBubblePosition(x+dx/box.width,bubble.width),
+    y:fitBubblePosition(y+dy/box.height,bubble.height),
+    width:bubble.width,height:bubble.height
+  };
+}
+
+window.addEventListener('pointermove',event=>{
+  if(!bubbleDrag||event.pointerId!==bubbleDrag.id)return;
+  const drag=bubbleDrag;
+  positionBubble(drag.button,bubbleDragGeometry(drag,event.clientX-drag.startX,event.clientY-drag.startY),
+    drag.visibleHandle);
+});
+
+function finishBubbleDrag(event){
+  if(!bubbleDrag||event.pointerId!==bubbleDrag.id)return;
+  const drag=bubbleDrag;
+  bubbleDrag=null;
+  if(event.type==='pointerup'){
+    selected=drag.index;
+    activeBubble=drag.bubble;
+    const dx=event.clientX-drag.startX,dy=event.clientY-drag.startY;
+    const moved=Math.hypot(dx,dy)>=5;
+    if(!moved&&!drag.handle){
+      selectBubbleByClick(drag.bubble,drag.index,event);
+      return;
+    }
+    if(moved){
+      resetBubbleClicks();
+      const geometry=bubbleDragGeometry(drag,dx,dy);
+      if(Object.keys(geometry).some(key=>geometry[key]!==activeBubble[key])){
+        rememberBubbleEdit(pages[selected]);
+        Object.assign(activeBubble,geometry);
+        mark(false);
+      }
+    }
+    render(true);
+    return;
+  }
+  paintBubbles();
+}
+window.addEventListener('pointerup',finishBubbleDrag);
+window.addEventListener('pointercancel',finishBubbleDrag);
+stage.addEventListener('lostpointercapture',finishBubbleDrag);
+
+stage.addEventListener('pointerup',event=>{
+  if(outsideTap?.id!==event.pointerId)return;
+  const start=outsideTap;
+  outsideTap=null;
+  if(readerMode!=='place'||stageClickStartedOnBubble||imageHit(event)
+    ||Math.hypot(event.clientX-start.x,event.clientY-start.y)>=8)return;
+  outsideTapHandled=true;
+  setReaderMode('memo');
+});
+stage.addEventListener('pointercancel',event=>{
+  if(outsideTap?.id===event.pointerId)outsideTap=null;
+});
+
+stage.onclick=event=>{
+  if(outsideTapHandled||event.target.closest('[contenteditable]'))return;
+  const hit=event.target.closest('.comicBubble');
+  if(hit){
+    const index=Number(hit.dataset.pageIndex);
+    const bubbles=pages[index].bubbles;
+    const bubbleIndex=Number(hit.dataset.bubbleIndex);
+    if(event.detail===0){
+      resetBubbleClicks();
+      selected=index;
+      activeBubble=bubbles[bubbleIndex];
+      document.body.classList.add('controlsVisible');
+      render(true);
+      startInlineBubbleEdit(event.clientX,event.clientY);
+    }
+    return;
+  }
+  if(event.target===stage&&stageClickStartedOnBubble)return;
+  resetBubbleClicks();
+  if(readerMode==='place'){
+    const hit=imageHit(event);
+    if(!hit)return;
+    const {img,box}=hit;
+    const x=(event.clientX-box.left)/box.width,y=(event.clientY-box.top)/box.height;
+    selected=pageAtImage(img);
+    const page=pages[selected];
+    const style=nextBubbleStyle||readBubbleStyle();
+    activeBubble={
+      ...style,
+      x:fitBubblePosition(x,style.width),
+      y:fitBubblePosition(y,style.height),
+      text:''
+    };
+    rememberBubbleEdit(page);
+    (page.bubbles??=[]).push(activeBubble);
+    mark(false);
+    render(true);
+    return;
+  }
+  const spreadPage=event.target.closest('.spreadPage');
+  if(spreadPage){selected=Number(spreadPage.dataset.page);render();}
+};
+
 function openMobileDetail(){
   document.body.classList.add('detailOpen','controlsVisible');
 }
@@ -36,11 +602,11 @@ function closeMobileDetail(){
   $('mobileDetail').classList.remove('expanded');
   $('mExpand').textContent='拡大';
 }
-function bindDetailSwipe(surface,direction,action){
+function bindDetailSwipe(surface,{left,right}){
   let swipeStart=null;
   surface.addEventListener('touchstart',event=>{
     const touch=event.touches[0];
-    swipeStart=event.touches.length===1
+    swipeStart=event.touches.length===1&&!event.target.closest('input,select,[contenteditable],.bubbleResizeHandle,.comicBubble')
       ? {id:touch.identifier,x:touch.clientX,y:touch.clientY}
       : null;
   },{passive:true});
@@ -51,17 +617,23 @@ function bindDetailSwipe(surface,direction,action){
     if(!start||event.touches.length)return;
     const touch=Array.from(event.changedTouches).find(touch=>touch.identifier===start.id);
     if(!touch)return;
-    const horizontal=(touch.clientX-start.x)*direction;
+    const horizontal=touch.clientX-start.x;
     const vertical=Math.abs(start.y-touch.clientY);
-    if(horizontal<48||horizontal<vertical*1.5)return;
+    const distance=Math.abs(horizontal);
+    const action=horizontal<0?left:right;
+    if(!action||distance<48||distance<vertical*1.5)return;
     if(event.cancelable)event.preventDefault();
     action();
   },{passive:false});
 }
-bindDetailSwipe($('tapZones'),-1,openMobileDetail);
-bindDetailSwipe($('mobileDetail'),1,closeMobileDetail);
-bindDetailSwipe($('mBackdrop'),1,closeMobileDetail);
+const detailSwipes={left:openMobileDetail,right:openBubbleSettings};
+bindDetailSwipe($('tapZones'),detailSwipes);
+bindDetailSwipe(stage,detailSwipes);
+bindDetailSwipe($('mobileDetail'),{right:closeMobileDetail});
+bindDetailSwipe($('mBackdrop'),{right:closeMobileDetail});
+bindDetailSwipe($('bubbleSettings'),{left:closeBubbleSettings});
+bindDetailSwipe($('bubbleBackdrop'),{left:closeBubbleSettings});
 $('mClose').onclick=$('mBackdrop').onclick=closeMobileDetail;
 $('mExpand').onclick=()=>{const expanded=$('mobileDetail').classList.toggle('expanded');$('mExpand').textContent=expanded?'縮小':'拡大'};
-window.addEventListener('keydown',e=>{if(e.target.matches('textarea,input'))return;if(e.key==='ArrowLeft'){e.preventDefault();step(1)}if(e.key==='ArrowRight'){e.preventDefault();step(-1)}});window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});restore()})();
+window.addEventListener('keydown',e=>{if(e.target.closest('textarea,input,[contenteditable]'))return;if(e.key==='ArrowLeft'){e.preventDefault();step(1)}if(e.key==='ArrowRight'){e.preventDefault();step(-1)}});window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});restore()})();
 </script></body></html>
